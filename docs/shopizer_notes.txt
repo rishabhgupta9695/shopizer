@@ -1,0 +1,781 @@
+=============================================================
+  SHOPIZER BACKEND - COMPLETE DEVELOPER REFERENCE GUIDE
+=============================================================
+Version: 3.2.5 (Spring Boot 2.5.12, Java 11+)
+Last Updated: 2026-03-24
+
+=============================================================
+1. WHAT IS SHOPIZER?
+=============================================================
+Shopizer is a Java-based open-source headless e-commerce platform.
+It exposes a REST API for catalog, cart, checkout, orders, customers,
+merchants, users, content, shipping, tax, and more.
+
+The backend is a Spring Boot application. The frontend is separate
+(React shop + Angular admin panel - both in sibling repos).
+
+=============================================================
+2. PROJECT MODULE STRUCTURE
+=============================================================
+shopizer/                    <- root Maven multi-module project
+  sm-core-model/             <- JPA entities / domain model (no Spring)
+  sm-core-modules/           <- pluggable integration modules (payment, shipping, search)
+  sm-core/                   <- core business services (Spring services, DAOs)
+  sm-shop-model/             <- REST API request/response DTOs (ReadableXxx / PersistableXxx)
+  sm-shop/                   <- Spring Boot web app (controllers, facades, security, config)
+
+Build order (Maven resolves automatically):
+  sm-core-model -> sm-core-modules -> sm-core -> sm-shop-model -> sm-shop
+
+=============================================================
+3. PREREQUISITES
+=============================================================
+- Java 11 or 17 (tested on both)
+- Maven 3.6+ (or use included ./mvnw wrapper)
+- Git
+
+Optional (for MySQL instead of embedded H2):
+- MySQL 5.7+ or 8.x
+
+=============================================================
+4. BUILD THE APPLICATION
+=============================================================
+
+Step 1: Clone the repo
+  git clone https://github.com/shopizer-ecommerce/shopizer.git
+  cd shopizer
+
+Step 2: Build all modules from root
+  ./mvnw clean install
+  (or: mvn clean install)
+  (add -DskipTests to skip tests: ./mvnw clean install -DskipTests)
+
+Step 3: Run the Spring Boot app
+  cd sm-shop
+  ../mvnw spring-boot:run
+  (or from root: ./mvnw spring-boot:run -pl sm-shop)
+
+The app starts on: http://localhost:8080
+Swagger UI:        http://localhost:8080/swagger-ui.html
+
+=============================================================
+5. DEFAULT DATABASE (H2 - no setup needed)
+=============================================================
+By default, Shopizer uses an embedded H2 database.
+The H2 file is stored at: sm-shop/SALESMANAGER.h2.db
+Schema name: SALESMANAGER
+hibernate.hbm2ddl.auto=update  (auto-creates/updates tables)
+
+On first run, InitializationLoader seeds reference data
+(countries, zones, currencies, languages, default merchant store).
+
+=============================================================
+6. SWITCHING TO MYSQL
+=============================================================
+Step 1: Create the database and user in MySQL:
+  CREATE DATABASE SALESMANAGER;
+  CREATE USER shopizer IDENTIFIED BY 'your-password';
+  GRANT ALL ON SALESMANAGER.* TO shopizer;
+  FLUSH PRIVILEGES;
+
+Step 2: Edit sm-shop/src/main/resources/profiles/local/database.properties
+  db.jdbcUrl=jdbc:mysql://127.0.0.1:3306/SALESMANAGER?autoReconnect=true&useUnicode=true&characterEncoding=UTF-8
+  db.user=shopizer
+  db.password=your-password
+  db.driverClass=com.mysql.cj.jdbc.Driver
+  hibernate.dialect=org.hibernate.dialect.MySQL5InnoDBDialect
+  hibernate.hbm2ddl.auto=update
+
+Step 3: Run with the local profile:
+  cd sm-shop
+  ../mvnw spring-boot:run -Dspring-boot.run.profiles=local
+
+=============================================================
+7. RUNNING WITH DOCKER
+=============================================================
+Backend only (H2 embedded):
+  docker run -p 8080:8080 shopizerecomm/shopizer:latest
+
+Admin panel (requires backend running):
+  docker run -e "APP_BASE_URL=http://localhost:8080/api" -p 82:80 shopizerecomm/shopizer-admin
+
+React shop (requires backend running):
+  docker run -e "APP_MERCHANT=DEFAULT" -e "APP_BASE_URL=http://localhost:8080" -p 80:80 shopizerecomm/shopizer-shop-reactjs
+
+Build your own Docker image (sm-shop/Dockerfile):
+  cd sm-shop
+  docker build -t shopizer-local .
+  docker run -p 8080:8080 shopizer-local
+
+=============================================================
+8. KEY CONFIGURATION FILES
+=============================================================
+sm-shop/src/main/resources/
+  application.properties          <- server port, logging, multipart, actuator
+  shopizer-properties.properties  <- app-level flags (image sizes, search queries, etc.)
+  vault.properties                <- secrets placeholder
+  profiles/
+    local/database.properties     <- MySQL local config
+    mysql/database.properties     <- MySQL generic config
+    docker/database.properties    <- Docker MySQL config
+    gcp/database.properties       <- Google Cloud SQL config
+    cloud/database.properties     <- generic cloud config
+    dependency/database.properties
+
+Important application.properties settings:
+  server.port=8080
+  spring.jpa.properties.hibernate.default_schema=SALESMANAGER
+  spring.servlet.multipart.max-file-size=4MB
+  spring.servlet.multipart.max-request-size=10MB
+  management.endpoints.web.exposure.include=*  (actuator)
+
+Important shopizer-properties.properties settings:
+  POPULATE_TEST_DATA=false         <- set true to seed demo products
+  INDEX_PRODUCTS=true              <- Elasticsearch indexing
+  PRODUCT_IMAGE_WIDTH_SIZE=1000
+  PRODUCT_IMAGE_HEIGHT_SIZE=1100
+  CROP_UPLOADED_IMAGES=false
+  ORDER_EMAIL_API=true
+  VALIDATE_CREDIT_CARD=false
+  MAIL_SEND_ORDER_UPDATES=true
+
+
+=============================================================
+9. SECURITY & AUTHENTICATION
+=============================================================
+Shopizer uses JWT (JSON Web Tokens) for authentication.
+There are two separate security realms:
+
+  a) ADMIN / USER realm  -> /api/v1/private/**
+     Login: POST /api/v1/private/login
+     Body: { "username": "admin@shopizer.com", "password": "password" }
+     Returns: { "token": "Bearer <jwt>" }
+     Use header: Authorization: Bearer <token>
+
+  b) CUSTOMER realm -> /api/v1/auth/**
+     Login: POST /api/v1/customer/login
+     Body: { "username": "customer@email.com", "password": "password" }
+     Returns: { "token": "Bearer <jwt>" }
+
+URL patterns:
+  /api/v1/private/**  -> requires ADMIN JWT
+  /api/v1/auth/**     -> requires CUSTOMER JWT
+  /api/v1/**          -> public (no auth)
+  /services/**        -> legacy v0 endpoints
+
+Default admin credentials (seeded on first run):
+  Username: admin@shopizer.com
+  Password: password
+
+Security config class: MultipleEntryPointsSecurityConfig.java
+JWT utility: JWTTokenUtil.java
+Token filter: AuthenticationTokenFilter.java
+
+=============================================================
+10. API VERSIONING
+=============================================================
+v0: /services/**                  (legacy, minimal)
+v1: /api/v1/**                    (main API - most endpoints)
+v2: /api/v2/**                    (newer product variant endpoints)
+
+=============================================================
+11. ALL REST API ENDPOINTS
+=============================================================
+
+--- AUTHENTICATION ---
+POST   /api/v1/private/login                    Admin login -> JWT
+GET    /api/v1/auth/refresh                     Refresh admin JWT
+POST   /api/v1/customer/register                Register new customer
+POST   /api/v1/customer/login                   Customer login -> JWT
+GET    /api/v1/auth/customer/refresh            Refresh customer JWT
+POST   /api/v1/auth/customer/password           Change customer password
+
+--- STORE (MerchantStore) ---
+GET    /api/v1/store/{code}                     Get public store info
+GET    /api/v1/private/store/{code}             Get store (admin)
+GET    /api/v1/private/stores                   List all stores
+GET    /api/v1/private/merchant/{code}/stores   List stores for merchant
+POST   /api/v1/private/store                    Create store
+PUT    /api/v1/private/store/{code}             Update store
+DELETE /api/v1/private/store/{code}             Delete store
+GET    /api/v1/private/store/{code}/marketing   Get store marketing config
+POST   /api/v1/private/store/{code}/marketing   Save store marketing config
+
+--- PRODUCTS (v1) ---
+POST   /api/v1/private/product                  Create product
+PUT    /api/v1/private/product/{id}             Update product
+PATCH  /api/v1/private/product/{id}             Partial update product
+DELETE /api/v1/private/product/{id}             Delete product
+GET    /api/v1/product/{id}                     Get product by ID (public)
+GET    /api/v1/product/{friendlyUrl}            Get product by URL (public)
+GET    /api/v1/products                         List products (public, paginated)
+GET    /api/v1/private/products                 List products (admin)
+GET    /api/v1/products/category/{id}           Products by category
+GET    /api/v1/product/{id}/related             Related products
+
+--- PRODUCTS (v2) ---
+POST   /api/v2/private/product                  Create product (v2)
+PUT    /api/v2/private/product/{id}             Update product (v2)
+GET    /api/v2/private/product/{id}             Get product (v2)
+GET    /api/v2/products                         List products (v2, public)
+GET    /api/v2/private/products                 List products (v2, admin)
+GET    /api/v2/private/product/inventory        Get product inventory (v2)
+
+--- PRODUCT IMAGES ---
+POST   /api/v1/private/product/{id}/image       Upload product image
+GET    /api/v1/product/{productId}/images       Get product images
+DELETE /api/v1/private/product/{id}/image/{imageId}  Delete image
+GET    /api/v1/private/product/image/{id}       Get image by ID
+
+--- PRODUCT REVIEWS ---
+POST   /api/v1/private/product/{id}/review      Create review (admin)
+POST   /api/v1/auth/product/{id}/review         Create review (customer)
+GET    /api/v1/product/{id}/reviews             Get product reviews
+PUT    /api/v1/private/product/{id}/review/{reviewId}  Update review
+DELETE /api/v1/private/product/{id}/review/{reviewId}  Delete review
+
+--- PRODUCT TYPES ---
+GET    /api/v1/private/product/types            List product types
+GET    /api/v1/private/product/type/{id}        Get product type
+GET    /api/v1/private/product/type/unique      Check type uniqueness
+POST   /api/v1/private/product/type             Create product type
+PUT    /api/v1/private/product/type/{id}        Update product type
+DELETE /api/v1/private/product/type/{id}        Delete product type
+
+--- PRODUCT OPTIONS & ATTRIBUTES ---
+POST   /api/v1/private/product/option           Create option
+GET    /api/v1/private/product/option/unique    Check option uniqueness
+POST   /api/v1/private/product/option/value     Create option value
+GET    /api/v1/private/product/option/value/unique  Check value uniqueness
+GET    /api/v1/private/product/options          List options
+GET    /api/v1/private/product/option/{id}      Get option
+PUT    /api/v1/private/product/option/{id}      Update option
+DELETE /api/v1/private/product/option/{id}      Delete option
+GET    /api/v1/private/product/option/{id}/values  Get option values
+GET    /api/v1/private/product/option/value/{id}   Get option value
+PUT    /api/v1/private/product/option/value/{id}   Update option value
+DELETE /api/v1/private/product/option/value/{id}   Delete option value
+
+--- PRODUCT PROPERTY SETS ---
+POST   /api/v1/private/product/property/set    Create property set
+GET    /api/v1/private/product/property/set/unique  Check uniqueness
+GET    /api/v1/private/product/property/set/{id}    Get property set
+PUT    /api/v1/private/product/property/set/{id}    Update property set
+DELETE /api/v1/private/product/property/set/{id}    Delete property set
+
+--- PRODUCT INVENTORY ---
+POST   /api/v1/private/product/{productId}/inventory       Add inventory
+PUT    /api/v1/private/product/{productId}/inventory/{id}  Update inventory
+DELETE /api/v1/private/product/{productId}/inventory/{id}  Delete inventory
+GET    /api/v1/private/product/{sku}/inventory              Get inventory by SKU
+
+--- PRODUCT PRICING ---
+POST   /api/v1/private/product/{sku}/inventory/{inventoryId}/price  Add price
+GET    /api/v1/private/product/{sku}/price                          Get prices
+GET    /api/v1/private/product/{sku}/inventory/{inventoryId}/price/{priceId}  Get price
+PUT    /api/v1/private/product/{sku}/inventory/{inventoryId}/price/{priceId}  Update price
+DELETE /api/v1/private/product/{sku}/price/{priceId}                Delete price
+
+--- PRODUCT GROUPS ---
+POST   /api/v1/private/products/group           Create product group
+PATCH  /api/v1/private/products/group/{code}    Update product group
+GET    /api/v1/private/product/groups           List product groups
+GET    /api/v1/products/group/{code}            Get group (public)
+DELETE /api/v1/private/products/group/{code}    Delete product group
+GET    /api/v1/private/products/group/{code}/products  Products in group
+POST   /api/v1/private/products/group/{code}/product/{productId}  Add to group
+DELETE /api/v1/private/products/group/{code}/product/{productId}  Remove from group
+
+--- PRODUCT VARIANTS (v2) ---
+POST   /api/v2/private/product/{productId}/variant         Create variant
+PUT    /api/v2/private/product/{id}/variant/{variantId}    Update variant
+GET    /api/v2/private/product/{id}/variant/{variantId}    Get variant
+GET    /api/v2/private/product/{id}/variant/{sku}/unique   Check SKU unique
+DELETE /api/v2/private/product/{id}/variant/{variantId}    Delete variant
+GET    /api/v2/private/product/{id}/variants               List variants
+
+--- PRODUCT VARIANT GROUPS (v2) ---
+POST   /api/v2/private/product/productVariantGroup         Create variant group
+PUT    /api/v2/private/product/productVariantGroup/{id}    Update variant group
+GET    /api/v2/private/product/productVariantGroup/{id}    Get variant group
+DELETE /api/v2/private/product/productVariantGroup/{id}    Delete variant group
+GET    /api/v2/private/product/{id}/variantGroups          List variant groups
+
+--- PRODUCT VARIATIONS (v2) ---
+POST   /api/v2/product/{id}/variation                      Create variation
+GET    /api/v2/category/{id}/variations                    Get variations by category
+POST   /api/v2/private/product/variation                   Create variation (admin)
+GET    /api/v2/private/product/variation/unique            Check uniqueness
+GET    /api/v2/private/product/variation/{id}              Get variation
+PUT    /api/v2/private/product/variation/{id}              Update variation
+DELETE /api/v2/private/product/variation/{id}              Delete variation
+
+--- MANUFACTURERS / BRANDS ---
+POST   /api/v1/private/manufacturer               Create manufacturer
+GET    /api/v1/manufacturer/{id}                  Get manufacturer (public)
+GET    /api/v1/private/manufacturers              List manufacturers (admin)
+GET    /api/v1/manufacturers                      List manufacturers (public)
+PUT    /api/v1/private/manufacturer/{id}          Update manufacturer
+DELETE /api/v1/private/manufacturer/{id}          Delete manufacturer
+
+--- CATEGORIES ---
+GET    /api/v1/category/{id}                      Get category by ID
+GET    /api/v1/category/{friendlyUrl}             Get category by URL
+GET    /api/v1/category                           List categories (public)
+GET    /api/v1/private/category/unique            Check category uniqueness
+GET    /api/v1/private/category                   List categories (admin)
+POST   /api/v1/private/category                   Create category
+PUT    /api/v1/private/category/{id}              Update category
+DELETE /api/v1/private/category/{id}              Delete category
+GET    /api/v1/category/{id}/products             Products in category
+
+--- CATALOG ---
+GET    /api/v1/private/catalogs                   List catalogs
+GET    /api/v1/private/catalog/unique             Check catalog uniqueness
+POST   /api/v1/private/catalog                    Create catalog
+PATCH  /api/v1/private/catalog/{id}               Update catalog
+DELETE /api/v1/private/catalog/{id}               Delete catalog
+GET    /api/v1/private/catalog/{id}               Get catalog
+POST   /api/v1/private/catalog/{id}/entry         Add entry to catalog
+DELETE /api/v1/private/catalog/{id}/entry/{entryId}  Remove entry from catalog
+GET    /api/v1/private/catalog/{id}/entries       List catalog entries
+
+--- SHOPPING CART ---
+POST   /api/v1/cart                               Create cart
+PUT    /api/v1/cart/{code}                        Update cart
+GET    /api/v1/cart/{code}                        Get cart
+DELETE /api/v1/cart/{code}                        Delete cart
+POST   /api/v1/cart/{code}/promo/{promo}          Apply promo code
+POST   /api/v1/cart/{code}/multi                  Add multiple items
+DELETE /api/v1/cart/{code}/product/{productId}    Remove item from cart
+GET    /api/v1/auth/cart/{code}                   Get cart (authenticated customer)
+
+--- ORDERS ---
+GET    /api/v1/private/orders/customers/{id}      Orders for a customer (admin)
+GET    /api/v1/auth/orders                        Customer's own orders
+GET    /api/v1/private/orders                     List all orders (admin)
+GET    /api/v1/private/orders/{id}                Get order by ID
+PUT    /api/v1/private/orders/{id}                Update order
+DELETE /api/v1/private/orders/{id}                Delete order
+POST   /api/v1/cart/{code}/order                  Place order from cart (public)
+POST   /api/v1/auth/cart/{code}/order             Place order (authenticated)
+
+--- ORDER STATUS HISTORY ---
+GET    /api/v1/private/orders/{id}/history        Get order status history
+POST   /api/v1/private/orders/{id}/history        Add status history entry
+
+--- ORDER TOTALS ---
+POST   /api/v1/cart/{code}/total                  Calculate order totals
+POST   /api/v1/auth/cart/{code}/total             Calculate totals (authenticated)
+
+--- ORDER PAYMENT ---
+POST   /api/v1/cart/{code}/payment/init           Init payment (public)
+POST   /api/v1/auth/cart/{code}/payment/init      Init payment (authenticated)
+GET    /api/v1/private/orders/{id}/payment/nextTransaction  Get next transaction
+GET    /api/v1/private/orders/{id}/payment/transactions     List transactions
+POST   /api/v1/private/orders/{id}/payment/capture         Capture payment
+POST   /api/v1/private/orders/{id}/payment/refund          Refund payment
+
+--- ORDER SHIPPING ---
+POST   /api/v1/cart/{code}/shipping               Get shipping quotes
+POST   /api/v1/auth/cart/{code}/shipping          Get shipping quotes (auth)
+
+--- CUSTOMERS ---
+POST   /api/v1/private/customer                   Create customer (admin)
+PUT    /api/v1/private/customer/{id}              Update customer (admin)
+PATCH  /api/v1/private/customer/{id}/address      Update customer address
+DELETE /api/v1/private/customer/{id}              Delete customer
+GET    /api/v1/private/customers                  List customers (admin)
+GET    /api/v1/private/customer/{id}              Get customer (admin)
+GET    /api/v1/auth/customer                      Get own profile (customer)
+PUT    /api/v1/auth/customer                      Update own profile
+GET    /api/v1/auth/customer/orders               Customer's orders
+
+--- CUSTOMER PASSWORD RESET ---
+POST   /api/v1/customer/password/reset/request    Request password reset
+GET    /api/v1/customer/{store}/reset/{token}     Validate reset token
+POST   /api/v1/customer/{store}/password/{token}  Set new password
+
+--- CUSTOMER REVIEWS ---
+POST   /api/v1/private/customers/{id}/reviews     Create review (admin)
+GET    /api/v1/customers/{id}/reviews             Get customer reviews
+PUT    /api/v1/private/customers/{id}/reviews/{reviewid}  Update review
+DELETE /api/v1/private/customers/{id}/reviews/{reviewId}  Delete review
+
+--- CUSTOMER NEWSLETTER ---
+POST   /api/v1/newsletter                         Subscribe to newsletter
+PUT    /api/v1/newsletter/{email}                 Update subscription
+DELETE /api/v1/newsletter/{email}                 Unsubscribe
+
+--- USERS (Admin Users) ---
+GET    /api/v1/private/users/{id}                 Get user
+POST   /api/v1/private/user/                      Create user
+PUT    /api/v1/private/user/{id}                  Update user
+PATCH  /api/v1/private/user/{id}/password         Change user password
+DELETE /api/v1/private/user/{id}                  Delete user
+GET    /api/v1/private/users                      List users
+
+--- USER PASSWORD RESET ---
+POST   /api/v1/user/password/reset/request        Request password reset
+GET    /api/v1/user/{store}/reset/{token}         Validate reset token
+POST   /api/v1/user/{store}/password/{token}      Set new password
+
+--- SECURITY / PERMISSIONS ---
+GET    /api/v1/sec/private/{group}/permissions    Get permissions for group
+GET    /api/v1/sec/private/permissions            List all permissions
+GET    /api/v1/sec/private/groups                 List all groups
+
+--- TAX ---
+POST   /api/v1/private/tax/class                  Create tax class
+GET    /api/v1/private/tax/class/unique           Check tax class uniqueness
+PUT    /api/v1/private/tax/class/{id}             Update tax class
+GET    /api/v1/private/tax/class                  List tax classes
+DELETE /api/v1/private/tax/class/{id}             Delete tax class
+POST   /api/v1/private/tax/rate                   Create tax rate
+GET    /api/v1/private/tax/rate/unique            Check tax rate uniqueness
+PUT    /api/v1/private/tax/rate/{id}              Update tax rate
+GET    /api/v1/private/tax/rates                  List tax rates
+DELETE /api/v1/private/tax/rate/{id}              Delete tax rate
+
+--- SHIPPING ---
+GET    /api/v1/private/shipping/origin            Get shipping origin
+POST   /api/v1/private/shipping/origin            Set shipping origin
+GET    /api/v1/private/shipping/packages          List shipping packages
+GET    /api/v1/private/shipping/package/{code}    Get shipping package
+POST   /api/v1/private/shipping/package           Create shipping package
+PUT    /api/v1/private/shipping/package/{code}    Update shipping package
+DELETE /api/v1/private/shipping/package/{code}    Delete shipping package
+GET    /api/v1/private/shipping/expedition        Get shipping expedition config
+POST   /api/v1/private/shipping/expedition        Save shipping expedition config
+GET    /api/v1/shipping/country                   Get shippable countries (public)
+GET    /api/v1/private/modules/shipping           List shipping modules
+POST   /api/v1/private/modules/shipping           Configure shipping module
+
+--- PAYMENT ---
+GET    /api/v1/private/modules/payment            List payment modules
+POST   /api/v1/private/modules/payment            Configure payment module
+GET    /api/v1/private/modules/payment/{code}     Get payment module config
+
+--- CONTENT ---
+GET    /api/v1/content/pages                      List content pages (public)
+GET    /api/v1/private/content/pages              List content pages (admin)
+GET    /api/v1/content/summary                    Content summary
+GET    /api/v1/content/boxes                      Content boxes (public)
+GET    /api/v1/private/content/boxes              Content boxes (admin)
+GET    /api/v1/content/pages/{code}               Get content page by code
+POST   /api/v1/private/content                    Create content
+PUT    /api/v1/private/content/{id}               Update content
+DELETE /api/v1/private/content/{id}               Delete content
+GET    /api/v1/private/content/list               List all content (admin)
+GET    /api/v1/private/content/folder             List content folder
+POST   /api/v1/private/content/images/add         Upload content image
+GET    /api/v1/content/images/download            Download content image
+
+--- SEARCH ---
+POST   /api/v1/search                             Search products
+POST   /api/v1/search/autocomplete                Autocomplete search
+POST   /api/v1/private/system/search/index        Re-index products (admin)
+
+--- REFERENCES (public, no auth) ---
+GET    /api/v1/languages                          List languages
+GET    /api/v1/country                            List countries
+GET    /api/v1/zones                              List zones/states
+GET    /api/v1/currency                           List currencies
+
+--- SYSTEM / CONFIG ---
+GET    /api/v1/config                             Get public config
+POST   /api/v1/contact                            Send contact form
+POST   /api/v1/private/optin                      Create optin
+POST   /api/v1/private/configurations/payment     Save payment config
+GET    /api/v1/private/configurations/payment     Get payment config
+GET    /api/v1/private/configurations/shipping    Get shipping config
+DELETE /api/v1/auth/cache/store/{storeId}/clear   Clear store cache
+
+--- MARKETPLACE ---
+GET    /api/v1/private/marketplace/{store}        Get marketplace info
+POST   /api/v1/store/signup                       Marketplace store signup
+GET    /api/v1/store/{store}/signup/{token}       Validate signup token
+
+--- LEGACY v0 ---
+GET    /services/public/{store}                   Get store info (v0)
+POST   /services/public/{store}/contact           Contact form (v0)
+POST   /services/private/system/module            Configure module (v0)
+POST   /services/private/system/optin             Create optin (v0)
+DELETE /services/private/system/optin/{code}      Delete optin (v0)
+POST   /services/private/system/optin/{code}/customer  Add customer to optin (v0)
+
+
+=============================================================
+12. CORE DOMAIN ENTITIES (sm-core-model)
+=============================================================
+All entities extend SalesManagerEntity<ID, T> which provides
+the base JPA entity structure with audit fields.
+
+--- MERCHANT / STORE ---
+MerchantStore          - The store entity (code, name, currency, country, etc.)
+MerchantConfig         - Key-value config for a store
+MerchantConfiguration  - Typed configuration (payment, shipping, etc.)
+MerchantLog            - Audit log for merchant actions
+
+--- CATALOG / PRODUCT ---
+Product                - Core product entity
+  - Has: ProductAvailability (stock, price per region)
+  - Has: ProductDescription (i18n name, description, SEO url)
+  - Has: ProductImage (images)
+  - Has: ProductAttribute (option values assigned to product)
+  - Has: ProductRelationship (related/featured products)
+  - Has: ProductReview (customer reviews)
+  - Has: ProductType (type classification)
+  - Has: Manufacturer (brand)
+  - Has: Category (one or more categories)
+  - Has: TaxClass
+
+ProductAvailability    - Stock quantity, price, region availability
+ProductPrice           - Price with optional special price and dates
+ProductDescription     - i18n descriptions (name, description, friendlyUrl, tags)
+ProductImage           - Image file reference
+ProductAttribute       - Links product to a ProductOptionValue
+ProductOption          - Option definition (e.g. "Color", "Size")
+ProductOptionValue     - Option value (e.g. "Red", "XL")
+ProductOptionSet       - Set of options grouped together
+ProductType            - Product type (GENERAL, DIGITAL, etc.)
+ProductReview          - Customer review with rating
+Manufacturer           - Brand/manufacturer entity
+Category               - Hierarchical category tree
+  - CategoryDescription (i18n)
+Catalog                - Named catalog grouping products
+CatalogCategoryEntry   - Entry linking a product to a catalog
+
+--- PRODUCT VARIANTS (newer model) ---
+ProductVariant         - A specific variant of a product (SKU-level)
+ProductVariantGroup    - Groups variants together
+ProductVariation       - Variation definition (e.g. size+color combo)
+
+--- CUSTOMER ---
+Customer               - Customer account
+  - Billing (embedded billing address)
+  - Delivery (embedded delivery address)
+  - CustomerAttribute (custom attributes)
+CustomerOption         - Custom option for customer profile
+CustomerOptionValue    - Value for customer option
+CustomerReview         - Review written by a customer
+CustomerOptin          - Newsletter/optin subscription
+
+--- ORDER ---
+Order                  - The main order entity
+  - OrderProduct (line items)
+  - OrderTotal (subtotal, tax, shipping, grand total)
+  - OrderStatusHistory (status change log)
+  - OrderAttribute (custom key-value on order)
+  - CreditCard (payment card info, masked)
+  - Transaction (payment transaction records)
+OrderProduct           - A product line in an order
+  - OrderProductAttribute (selected options)
+  - OrderProductPrice (price snapshot)
+  - OrderProductDownload (for digital products)
+OrderStatus (enum)     - ORDERED, PROCESSED, SHIPPED, DELIVERED, REFUNDED, CANCELLED, etc.
+OrderTotal             - Financial totals (subtotal, tax, shipping, discount, total)
+Transaction            - Payment transaction (AUTHORIZE, CAPTURE, REFUND, etc.)
+
+--- SHOPPING CART ---
+ShoppingCart           - Cart entity (linked to customer or anonymous by code)
+ShoppingCartItem       - Item in cart
+ShoppingCartAttributeItem - Selected option for a cart item
+
+--- TAX ---
+TaxClass               - Tax class (e.g. "Standard", "Reduced")
+TaxRate                - Tax rate (percentage, linked to zone/country)
+
+--- SHIPPING ---
+ShippingConfiguration  - Store shipping settings
+ShippingOrigin         - Origin address for shipping calculations
+ShippingOption         - A shipping option returned from a quote
+ShippingQuote          - A shipping quote result
+
+--- USER ---
+User                   - Admin/staff user
+Group                  - User group (ADMIN, STORE_ADMIN, etc.)
+Permission             - Permission definition
+
+--- CONTENT ---
+Content                - CMS content (pages, boxes, banners)
+ContentDescription     - i18n content description
+
+--- REFERENCE DATA ---
+Country                - Country reference
+Zone                   - State/province reference
+Currency               - Currency reference
+Language               - Language reference
+GeoZone                - Geographic zone for tax/shipping rules
+
+--- SYSTEM ---
+IntegrationModule      - Pluggable module definition (payment, shipping, etc.)
+IntegrationConfiguration - Module configuration
+SystemConfiguration    - System-level key-value config
+Optin                  - Newsletter/optin definition
+CustomerOptin          - Customer's optin subscription
+
+=============================================================
+13. ARCHITECTURE PATTERNS
+=============================================================
+
+Request Flow:
+  HTTP Request
+    -> Spring Security Filter (JWT validation)
+    -> API Controller (v1/v2 in store/api/)
+    -> Facade (store/facade/ or store/controller/*/facade/)
+    -> Core Service (sm-core business services)
+    -> Repository (JPA/Hibernate)
+    -> Database
+
+Key patterns:
+  - Persistable* DTOs: incoming request bodies (create/update)
+  - Readable* DTOs: outgoing response bodies
+  - Populator: converts between entity <-> DTO (older pattern)
+  - Mapper: MapStruct-based entity <-> DTO (newer pattern)
+  - Facade: orchestration layer between controller and services
+
+Package layout in sm-shop:
+  store/api/v1/         <- REST controllers (API endpoints)
+  store/api/v2/         <- REST controllers (newer endpoints)
+  store/facade/         <- Facade implementations
+  store/controller/*/facade/  <- More facade implementations (older)
+  store/security/       <- JWT, auth managers, filters
+  application/config/   <- Spring configuration classes
+  populator/            <- Entity <-> DTO converters (older)
+  mapper/               <- MapStruct mappers (newer)
+  model/                <- DTO classes (request/response)
+  utils/                <- Utility classes
+
+=============================================================
+14. HOW TO ADD NEW FUNCTIONALITY
+=============================================================
+
+To add a new feature (e.g. "Wishlist"):
+
+1. Add entity in sm-core-model:
+   - Create entity class in com.salesmanager.core.model.*
+   - Extend SalesManagerEntity<Long, Wishlist>
+   - Add JPA annotations (@Entity, @Table, etc.)
+
+2. Add repository in sm-core:
+   - Create interface extending SalesManagerRepository<Wishlist, Long>
+   - Add custom query methods if needed
+
+3. Add service in sm-core:
+   - Create interface: WishlistService
+   - Create implementation: WishlistServiceImpl
+   - Annotate with @Service, inject repository
+
+4. Add DTOs in sm-shop-model (or sm-shop):
+   - PersistableWishlist (request body)
+   - ReadableWishlist (response body)
+
+5. Add mapper/populator in sm-shop:
+   - Create mapper or populator for entity <-> DTO conversion
+
+6. Add facade in sm-shop:
+   - Create WishlistFacade interface
+   - Create WishlistFacadeImpl with business logic
+
+7. Add API controller in sm-shop:
+   - Create WishlistApi.java in store/api/v1/
+   - Annotate with @RestController, @RequestMapping("/api/v1")
+   - Inject facade, define endpoints
+
+8. Rebuild:
+   ./mvnw clean install -DskipTests
+   cd sm-shop && ../mvnw spring-boot:run
+
+=============================================================
+15. IMPORTANT NOTES & GOTCHAS
+=============================================================
+
+1. Multi-store: Shopizer supports multiple stores. Most endpoints
+   accept a "store" query param (defaults to "DEFAULT").
+   The MerchantStore is resolved via MerchantStoreArgumentResolver.
+
+2. i18n: Most entities have a *Description companion entity for
+   internationalized text. The "lang" query param (e.g. ?lang=en)
+   controls which language is returned.
+
+3. URL pattern for auth:
+   - /private/** = admin JWT required
+   - /auth/** = customer JWT required
+   - everything else = public
+
+4. Default store code: "DEFAULT"
+   Default admin: admin@shopizer.com / password
+
+5. H2 console: Not enabled by default. To enable, add to
+   application.properties:
+     spring.h2.console.enabled=true
+     spring.h2.console.path=/h2-console
+
+6. Swagger UI is the best way to explore all endpoints:
+   http://localhost:8080/swagger-ui.html
+
+7. Actuator endpoints are exposed at /actuator/**
+   Health: http://localhost:8080/actuator/health
+
+8. Image uploads are stored locally under sm-shop/files/
+   (configurable via shopizer-properties.properties)
+
+9. Elasticsearch is optional. Set INDEX_PRODUCTS=false in
+   shopizer-properties.properties to disable search indexing.
+   management.health.elasticsearch.enabled=false is already set.
+
+10. The CORS filter (CorsFilter.java) allows all origins by default.
+    Tighten this for production.
+
+11. XSS protection is applied via XssFilter.java on all requests.
+
+12. Bean definition overriding is enabled:
+    spring.main.allow-bean-definition-overriding=true
+    This allows modules to override default implementations.
+
+13. Multipart limits:
+    max-file-size=4MB, max-request-size=10MB
+    Increase in application.properties if needed.
+
+14. The sm-core-modules module contains pluggable integrations:
+    - Payment: PayPal, Stripe, etc.
+    - Shipping: Canada Post, flat rate, etc.
+    - Search: Elasticsearch
+
+=============================================================
+16. USEFUL COMMANDS CHEATSHEET
+=============================================================
+
+Build everything (skip tests):
+  ./mvnw clean install -DskipTests
+
+Run backend:
+  cd sm-shop && ../mvnw spring-boot:run
+
+Run with MySQL profile:
+  cd sm-shop && ../mvnw spring-boot:run -Dspring-boot.run.profiles=local
+
+Run with specific port:
+  cd sm-shop && ../mvnw spring-boot:run -Dserver.port=9090
+
+Build Docker image:
+  cd sm-shop && docker build -t shopizer .
+
+Run Docker:
+  docker run -p 8080:8080 shopizer
+
+Access Swagger:
+  http://localhost:8080/swagger-ui.html
+
+Admin login (curl):
+  curl -X POST http://localhost:8080/api/v1/private/login \
+    -H "Content-Type: application/json" \
+    -d '{"username":"admin@shopizer.com","password":"password"}'
+
+Get products (curl):
+  curl http://localhost:8080/api/v1/products?store=DEFAULT&lang=en
+
+=============================================================
+END OF DOCUMENT
+=============================================================
