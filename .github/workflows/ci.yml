@@ -33,7 +33,7 @@ jobs:
           cache: maven
 
       - name: Build
-        run: ./mvnw clean package -DskipTests
+        run: ./mvnw clean install -DskipTests
 
       - name: Run unit tests
         run: ./mvnw test -pl sm-shop -Dtest="DateUtilTest,FileNameUtilsTest,SanitizeUtilsTest,GeoLocationUtilsTest,BeanUtilsTest" -Dsurefire.failIfNoSpecifiedTests=false

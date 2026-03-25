@@ -473,12 +473,6 @@
 			</snapshots>
 		</repository>
 		<repository>
-			<id>spring-releases</id>
-			<name>Spring Releases</name>
-			<url>https://repo.spring.io/libs-release</url>
-		</repository>
-		<!-- Milestone repo -->
-		<repository>
 			<id>spring-milestone</id>
 			<name>Spring Milestone</name>
 			<url>https://repo.spring.io/milestone/</url>
@@ -491,11 +485,6 @@
 	</repositories>
 
 	<pluginRepositories>
-		<pluginRepository>
-			<id>spring-releases</id>
-			<name>Spring Releases</name>
-			<url>https://repo.spring.io/libs-release</url>
-		</pluginRepository>
 	</pluginRepositories>
 
 	<build>
