@@ -32,7 +32,7 @@ jobs:
           distribution: 'temurin'
 
       - name: Build
-        run: ./mvnw clean install -DskipTests --no-transfer-progress
+        run: ./mvnw clean install -DskipTests -q
 
       - name: Run unit tests
         run: ./mvnw test -pl sm-shop -Dtest="DateUtilTest,FileNameUtilsTest,SanitizeUtilsTest,GeoLocationUtilsTest,BeanUtilsTest" -Dsurefire.failIfNoSpecifiedTests=false
