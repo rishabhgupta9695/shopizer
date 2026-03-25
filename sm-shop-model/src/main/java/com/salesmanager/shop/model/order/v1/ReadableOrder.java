@@ -23,12 +23,19 @@ public class ReadableOrder extends Order {
 	private ReadablePayment payment;
 	private ReadableTotal total;
 	private List<ReadableOrderProduct> products;
+	private String status;
 	
 	public List<ReadableOrderProduct> getProducts() {
 		return products;
 	}
 	public void setProducts(List<ReadableOrderProduct> products) {
 		this.products = products;
+	}
+	public String getStatus() {
+		return status;
+	}
+	public void setStatus(String status) {
+		this.status = status;
 	}
 	public ReadableDelivery getDelivery() {
 		return delivery;
