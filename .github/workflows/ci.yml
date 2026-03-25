@@ -30,10 +30,9 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: maven
 
       - name: Build
-        run: ./mvnw clean install -DskipTests
+        run: ./mvnw clean install -DskipTests --no-transfer-progress
 
       - name: Run unit tests
         run: ./mvnw test -pl sm-shop -Dtest="DateUtilTest,FileNameUtilsTest,SanitizeUtilsTest,GeoLocationUtilsTest,BeanUtilsTest" -Dsurefire.failIfNoSpecifiedTests=false
