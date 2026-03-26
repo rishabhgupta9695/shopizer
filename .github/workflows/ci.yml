@@ -63,16 +63,3 @@ jobs:
           context: ./sm-shop
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/shopizer:latest,ghcr.io/${{ github.repository_owner }}/shopizer:${{ github.sha }}
-
-  deploy:
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    environment: production        # ← requires manual approval in GitHub UI
-
-    steps:
-      - name: Deploy to local Kubernetes
-        run: |
-          echo "Approved — rolling out shopizer:${{ github.sha }}"
-          kubectl rollout restart deployment/shopizer -n shopizer
-        env:
-          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
